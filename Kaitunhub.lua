@@ -1,12 +1,11 @@
 --[[
-    Hậu Hub - Anime Warriors 3 (No Conflict Stop Button)
-    Phiên bản: 6.7
-    Tác giả: Hậu
+    Hậu Hub - Anime Warriors 3 (Full Fix by Tâm Dev)
+    Phiên bản: 6.8.1
+    Tác giả: Hậu, Tâm Dev (sửa lỗi hoàn chỉnh)
     - Tự động chạy tất cả khi load script.
-    - Lọc quái: bỏ qua NPC "quest"/"giver", các NPC khác vẫn đánh.
-    - Teleport an toàn: CFrame, nếu lỗi thì siêu tốc di chuyển.
-    - Nút STOP nhỏ, không xung đột, có thể kéo thả.
-    - Đảo: Planet Nemak, Future City, Sand Village, Sky Island, Rain Village, Soul District.
+    - Teleport tức thời an toàn (CFrame + fallback siêu tốc).
+    - Ưu tiên đánh quái máu thấp, bỏ qua NPC quest/giver.
+    - Nút STOP nhỏ gọn, không xung đột.
 --]]
 
 local Players = game:GetService("Players")
@@ -15,9 +14,9 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local FARM_RANGE = 300
+local FARM_RANGE = 250
 
--- ================== HỆ THỐNG ĐẢO (CẦN TỌA ĐỘ THỰC TẾ) ==================
+-- ================== HỆ THỐNG ĐẢO (cần tọa độ thực) ==================
 local ISLANDS = {
     {Name = "Planet Nemak",    Center = Vector3.new(0, 50, 0),    Radius = 300},
     {Name = "Future City",     Center = Vector3.new(500, 50, 500), Radius = 300},
@@ -37,7 +36,7 @@ local function getHRP(char)
     return char and char:FindFirstChild("HumanoidRootPart")
 end
 
--- Lấy đảo hiện tại
+-- Lấy đảo hiện tại dựa trên vị trí nhân vật
 local function getCurrentIsland()
     local hrp = getHRP(LocalPlayer.Character)
     if not hrp then return nil end
@@ -54,7 +53,7 @@ local function getCurrentIsland()
     return closest
 end
 
--- Tìm NPC quest
+-- Tìm NPC nhiệm vụ (quest NPC) trên đảo hiện tại
 local function findNPCOnIsland(island)
     if not island then return nil end
     local npcs = {}
@@ -78,7 +77,7 @@ local function findNPCOnIsland(island)
     return npcs[1]
 end
 
--- Trang bị vũ khí tốt nhất
+-- Tự động trang bị vũ khí tốt nhất (dựa vào damage hoặc tên)
 local function equipBestWeapon()
     local char = LocalPlayer.Character
     if not char then return end
@@ -110,7 +109,7 @@ local function equipBestWeapon()
     if best then best.Parent = char end
 end
 
--- Tìm mục tiêu farm (chỉ bỏ qua NPC quest/giver)
+-- Tìm mục tiêu quái (ưu tiên máu thấp nhất, chỉ bỏ qua quest/giver NPC)
 local function findBestTarget()
     local island = getCurrentIsland()
     if not island then return nil end
@@ -127,6 +126,7 @@ local function findBestTarget()
             local hum = obj.Humanoid
             if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
                 local name = obj.Name:lower()
+                -- Chỉ bỏ qua NPC có "quest" hoặc "giver", vẫn đánh lính canh (npc thường)
                 if not name:find("quest") and not name:find("giver") then
                     local objPos = obj.HumanoidRootPart.Position
                     if (objPos - island.Center).Magnitude <= island.Radius then
@@ -144,29 +144,32 @@ local function findBestTarget()
         return a.dist < b.dist
     end)
 
+    -- Trả về mục tiêu gần nhất trong phạm vi farm, hoặc con máu thấp nhất toàn đảo
     for _, t in ipairs(targets) do
         if t.dist <= FARM_RANGE then return t.obj end
     end
     return targets[1].obj
 end
 
--- Teleport an toàn
+-- Dịch chuyển an toàn: thử CFrame, nếu lỗi thì chạy siêu tốc đến
 local function safeTeleport(targetPos)
     local char = LocalPlayer.Character
     if not char then return false end
     local hrp = getHRP(char)
     if not hrp then return false end
     local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health == 0 then return false end
+    if not humanoid or humanoid.Health <= 0 then return false end
 
     local distance = (hrp.Position - targetPos).Magnitude
-    if distance < 1 then return true end
+    if distance < 1 then return true end  -- đã đến nơi
 
+    -- Cách 1: Dịch chuyển bằng CFrame
     local success, err = pcall(function()
         hrp.CFrame = CFrame.new(targetPos)
     end)
     if success then return true end
 
+    -- Cách 2: Tăng tốc chạy (fallback)
     local oldSpeed = humanoid.WalkSpeed
     humanoid.WalkSpeed = 300
     char:MoveTo(targetPos)
@@ -187,7 +190,7 @@ local function safeTeleport(targetPos)
     return true
 end
 
--- Tìm Remote
+-- Tìm RemoteEvent theo từ khóa
 local function findRemote(keyword)
     for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
         if v:IsA("RemoteEvent") and v.Name:lower():find(keyword:lower()) then
@@ -202,14 +205,16 @@ local startQuestRemote = findRemote("startquest") or findRemote("takequest") or 
 local completeQuestRemote = findRemote("completequest") or findRemote("finishquest") or findRemote("submitquest")
 local addStatsRemote = findRemote("addstats") or findRemote("upgrade") or findRemote("stat")
 
--- Auto Farm
+-- Auto Farm chính
 local function doAutoFarm()
     if not autoFarm then return end
     equipBestWeapon()
     local target = findBestTarget()
     if target then
-        local targetPos = target.HumanoidRootPart.Position
-        safeTeleport(targetPos + Vector3.new(0, 0, 3))
+        local targetRoot = target:FindFirstChild("HumanoidRootPart")
+        if not targetRoot then return end
+        local targetPos = targetRoot.Position
+        safeTeleport(targetPos + Vector3.new(0, 0, 3))  -- đứng cách 3 stud
         local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
         if tool and tool:FindFirstChild("Activate") then
             tool:Activate()
@@ -225,7 +230,7 @@ local function doAutoFarm()
     end
 end
 
--- Auto Quest
+-- Auto Quest (nhận/nộp quest từ NPC trên đảo)
 local lastQuestTime = 0
 local function doAutoQuest()
     if not autoQuest then return end
@@ -255,7 +260,7 @@ local function doAutoStats()
     end
 end
 
--- ESP
+-- ESP (hiển thị người chơi khác)
 local function updateESP()
     for _, player in ipairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -276,15 +281,11 @@ local function updateESP()
     end
 end
 
--- ================== NÚT STOP AN TOÀN (KHÔNG XUNG ĐỘT) ==================
+-- Nút STOP nhỏ góc phải, không xung đột
 local function createStopButton()
-    -- Đặt tên độc nhất, tránh trùng với GUI khác
     local guiName = "HauHub_StopBtn"
     local existing = game.CoreGui:FindFirstChild(guiName)
-    if existing then
-        -- Nếu đã có GUI cũ, xóa đi để tạo mới (tránh lỗi khi chạy lại script)
-        existing:Destroy()
-    end
+    if existing then existing:Destroy() end
 
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = guiName
@@ -327,11 +328,10 @@ local function createStopButton()
     end)
 end
 
--- Khởi tạo nút
+-- Khởi động
 createStopButton()
-print("[Hậu Hub] Đã sẵn sàng farm! Nút STOP ở góc phải, không xung đột.")
+print("[Hậu Hub] Sẵn sàng - Tâm Dev fix hoàn chỉnh.")
 
--- Vòng lặp chính
 RunService.Heartbeat:Connect(function()
     if LocalPlayer.Character and getHRP(LocalPlayer.Character) then
         doAutoFarm()
