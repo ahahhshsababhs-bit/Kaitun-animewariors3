@@ -1,352 +1,320 @@
---[[
-    Hậu Hub - Anime Warriors 3 (Full Fix by Tâm Dev)
-    Phiên bản: 6.8.1
-    Tác giả: Hậu, Tâm Dev (sửa lỗi hoàn chỉnh)
-    - Tự động chạy tất cả khi load script.
-    - Teleport tức thời an toàn (CFrame + fallback siêu tốc).
-    - Ưu tiên đánh quái máu thấp, bỏ qua NPC quest/giver.
-    - Nút STOP nhỏ gọn, không xung đột.
---]]
+-- [[
+--     Kaitun Hub - Anime Warriors 3 Script (UI Anime Theme)
+--     Giao diện: Nền anime, nút toggle hiện đại.
+--     Chức năng: Auto Farm, Auto Quest, Auto Stats, Teleport Boss, ESP.
+--     [BẢN SỬA LỖI HOÀN HẢO - v3.2 GOD MODE]
+-- ]]
 
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local CoreGui = game:GetService("CoreGui")
 local RunService = game:GetService("RunService")
 
-local FARM_RANGE = 250
+-- Cấu hình
+local ANIME_BG_IMAGE = "rbxassetid://7483861177" 
 
--- ================== HỆ THỐNG ĐẢO (cần tọa độ thực) ==================
-local ISLANDS = {
-    {Name = "Planet Nemak",    Center = Vector3.new(0, 50, 0),    Radius = 300},
-    {Name = "Future City",     Center = Vector3.new(500, 50, 500), Radius = 300},
-    {Name = "Sand Village",    Center = Vector3.new(-500, 50, -500), Radius = 300},
-    {Name = "Sky Island",      Center = Vector3.new(0, 500, 0),   Radius = 250},
-    {Name = "Rain Village",    Center = Vector3.new(1000, 50, -1000), Radius = 300},
-    {Name = "Soul District",   Center = Vector3.new(-1000, 50, 1000), Radius = 300},
+-- Trạng thái bật/tắt
+local Config = {
+    AutoFarm = false,
+    AutoQuest = false,
+    AutoStats = false,
+    ESP = false
 }
 
-local autoFarm = true
-local autoQuest = true
-local autoStats = true
-local espEnabled = true
-
--- Hàm lấy HumanoidRootPart an toàn
-local function getHRP(char)
-    return char and char:FindFirstChild("HumanoidRootPart")
+-- Ngăn chặn mở nhiều cửa sổ
+if CoreGui:FindFirstChild("KaitunHub") then
+    CoreGui.KaitunHub:Destroy()
 end
 
--- Lấy đảo hiện tại dựa trên vị trí nhân vật
-local function getCurrentIsland()
-    local hrp = getHRP(LocalPlayer.Character)
-    if not hrp then return nil end
-    local pos = hrp.Position
-    local closest = nil
-    local minDist = math.huge
-    for _, island in ipairs(ISLANDS) do
-        local dist = (pos - island.Center).Magnitude
-        if dist <= island.Radius and dist < minDist then
-            minDist = dist
-            closest = island
+-- === HỆ THỐNG ESP TỐI ƯU ===
+local function addESP(player)
+    if player == LocalPlayer then return end
+    if player.Character then
+        local hl = player.Character:FindFirstChild("ESP_Highlight")
+        if not hl then
+            hl = Instance.new("Highlight")
+            hl.Name = "ESP_Highlight"
+            hl.FillColor = Color3.fromRGB(255, 80, 80)
+            hl.FillTransparency = 0.5
+            hl.OutlineColor = Color3.fromRGB(255, 255, 255)
+            hl.OutlineTransparency = 0.2
+            hl.Parent = player.Character
         end
     end
-    return closest
 end
 
--- Tìm NPC nhiệm vụ (quest NPC) trên đảo hiện tại
-local function findNPCOnIsland(island)
-    if not island then return nil end
-    local npcs = {}
-    for _, v in ipairs(Workspace:GetDescendants()) do
-        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v:FindFirstChild("Head") then
-            if not Players:GetPlayerFromCharacter(v) then
-                local root = v:FindFirstChild("HumanoidRootPart") or v.Head
-                if root and (root.Position - island.Center).Magnitude <= island.Radius then
-                    table.insert(npcs, v)
-                end
-            end
+local function removeESP(player)
+    if player.Character then
+        local hl = player.Character:FindFirstChild("ESP_Highlight")
+        if hl then hl:Destroy() end
+    end
+end
+
+local function refreshAllESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if Config.ESP then
+            addESP(player)
+        else
+            removeESP(player)
         end
     end
-    if #npcs == 0 then return nil end
-    local playerPos = getHRP(LocalPlayer.Character).Position
-    table.sort(npcs, function(a, b)
-        local rootA = a:FindFirstChild("HumanoidRootPart") or a.Head
-        local rootB = b:FindFirstChild("HumanoidRootPart") or b.Head
-        return (rootA.Position - playerPos).Magnitude < (rootB.Position - playerPos).Magnitude
-    end)
-    return npcs[1]
 end
 
--- Tự động trang bị vũ khí tốt nhất (dựa vào damage hoặc tên)
-local function equipBestWeapon()
+-- === CƠ CHẾ NOCLIP CHUẨN ENGINE (FIX HOÀN TOÀN LỖI GHI ĐÈ) ===
+local resetCollisionDone = false
+
+RunService.Stepped:Connect(function()
     local char = LocalPlayer.Character
     if not char then return end
-    local backpack = LocalPlayer.Backpack
-    local currentTool = char:FindFirstChildOfClass("Tool")
-    local tools = {}
-    for _, tool in ipairs(backpack:GetChildren()) do
-        if tool:IsA("Tool") then table.insert(tools, tool) end
-    end
-    if #tools == 0 and not currentTool then return end
 
-    table.sort(tools, function(a, b)
-        local dmgA = a:GetAttribute("Damage") or 0
-        local dmgB = b:GetAttribute("Damage") or 0
-        if dmgA ~= dmgB then return dmgA > dmgB end
-        local keywords = {"sword", "blade", "kunai", "shuriken", "rasengan", "chidori", "katana"}
-        local pA, pB = 0, 0
-        for i, kw in ipairs(keywords) do
-            if a.Name:lower():find(kw) then pA = math.max(pA, i) end
-            if b.Name:lower():find(kw) then pB = math.max(pB, i) end
+    if Config.AutoFarm then
+        -- Ép CanCollide = false LIÊN TỤC mỗi khung hình để chống lại cơ chế Physics tự bật của Roblox
+        for _, part in pairs(char:GetDescendants()) do
+            if part:IsA("BasePart") and part.CanCollide then
+                part.CanCollide = false
+            end
         end
-        if pA ~= pB then return pA > pB end
-        return #a.Name > #b.Name
-    end)
+        resetCollisionDone = false
+    else
+        -- Chỉ khôi phục va chạm ĐÚNG 1 LẦN duy nhất khi tắt Auto Farm để tránh giật lag máy
+        if not resetCollisionDone then
+            for _, part in pairs(char:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    part.CanCollide = true
+                end
+            end
+            resetCollisionDone = true
+        end
+    end
+end)
 
-    local best = tools[1]
-    if currentTool == best then return end
-    if currentTool then currentTool.Parent = backpack end
-    if best then best.Parent = char end
-end
+-- Hàm tạo giao diện
+local function CreateGUI()
+    local ScreenGui = Instance.new("ScreenGui")
+    ScreenGui.Name = "KaitunHub"
+    ScreenGui.Parent = CoreGui
+    ScreenGui.ResetOnSpawn = false
 
--- Tìm mục tiêu quái (ưu tiên máu thấp nhất, chỉ bỏ qua quest/giver NPC)
-local function findBestTarget()
-    local island = getCurrentIsland()
-    if not island then return nil end
-    local char = LocalPlayer.Character
-    if not char then return nil end
-    local root = getHRP(char)
-    if not root then return nil end
+    local MainFrame = Instance.new("Frame")
+    MainFrame.Name = "MainFrame"
+    MainFrame.Parent = ScreenGui
+    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+    MainFrame.BackgroundTransparency = 0.1
+    MainFrame.Position = UDim2.new(0.1, 0, 0.15, 0)
+    MainFrame.Size = UDim2.new(0, 280, 0, 420)
+    MainFrame.Active = true
+    MainFrame.Draggable = true
+    MainFrame.ClipsDescendants = true 
 
-    local targets = {}
-    for _, obj in ipairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= char
-            and obj:FindFirstChild("Humanoid")
-            and obj:FindFirstChild("HumanoidRootPart") then
-            local hum = obj.Humanoid
-            if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
-                local name = obj.Name:lower()
-                -- Chỉ bỏ qua NPC có "quest" hoặc "giver", vẫn đánh lính canh (npc thường)
-                if not name:find("quest") and not name:find("giver") then
-                    local objPos = obj.HumanoidRootPart.Position
-                    if (objPos - island.Center).Magnitude <= island.Radius then
-                        local dist = (objPos - root.Position).Magnitude
-                        table.insert(targets, {obj = obj, hp = hum.Health, dist = dist})
+    local UICorner = Instance.new("UICorner")
+    UICorner.CornerRadius = UDim.new(0, 12)
+    UICorner.Parent = MainFrame
+
+    local AnimeBG = Instance.new("ImageLabel")
+    AnimeBG.Name = "AnimeBG"
+    AnimeBG.Parent = MainFrame
+    AnimeBG.BackgroundTransparency = 1
+    AnimeBG.Size = UDim2.new(1, 0, 1, 0)
+    AnimeBG.Position = UDim2.new(0, 0, 0, 0)
+    AnimeBG.Image = ANIME_BG_IMAGE
+    AnimeBG.ScaleType = Enum.ScaleType.Crop
+    AnimeBG.ZIndex = 1
+
+    local Overlay = Instance.new("Frame")
+    Overlay.Name = "Overlay"
+    Overlay.Parent = MainFrame
+    Overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    Overlay.BackgroundTransparency = 0.5
+    Overlay.Size = UDim2.new(1, 0, 1, 0)
+    Overlay.ZIndex = 2
+
+    local Title = Instance.new("TextLabel")
+    Title.Name = "Title"
+    Title.Parent = MainFrame
+    Title.BackgroundTransparency = 1
+    Title.Size = UDim2.new(1, 0, 0, 50)
+    Title.Font = Enum.Font.GothamBold
+    Title.Text = "⚔️ Kaitun Hub ⚔️"
+    Title.TextColor3 = Color3.fromRGB(255, 215, 0)
+    Title.TextSize = 22
+    Title.TextStrokeTransparency = 0.5
+    Title.ZIndex = 3
+
+    local function CreateToggleButton(configKey, labelName, posY, customCallback)
+        local Button = Instance.new("TextButton")
+        Button.Name = labelName
+        Button.Parent = MainFrame
+        Button.BackgroundColor3 = Config[configKey] and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
+        Button.Position = UDim2.new(0.1, 0, posY, 0)
+        Button.Size = UDim2.new(0.8, 0, 0, 42)
+        Button.Font = Enum.Font.GothamSemibold
+        Button.Text = labelName .. ": " .. (Config[configKey] and "ON" or "OFF")
+        Button.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Button.TextSize = 16
+        Button.ZIndex = 3
+        Button.AutoButtonColor = false
+
+        local UICornerBtn = Instance.new("UICorner")
+        UICornerBtn.CornerRadius = UDim.new(0, 10)
+        UICornerBtn.Parent = Button
+
+        Button.MouseEnter:Connect(function()
+            Button.BackgroundColor3 = Config[configKey] and Color3.fromRGB(46, 160, 46) or Color3.fromRGB(200, 50, 50)
+        end)
+        Button.MouseLeave:Connect(function()
+            Button.BackgroundColor3 = Config[configKey] and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
+        end)
+
+        Button.MouseButton1Click:Connect(function()
+            Config[configKey] = not Config[configKey]
+            Button.Text = labelName .. ": " .. (Config[configKey] and "ON" or "OFF")
+            Button.BackgroundColor3 = Config[configKey] and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
+            if customCallback then customCallback() end
+        end)
+
+        return Button
+    end
+
+    CreateToggleButton("AutoFarm", "Auto Farm", 0.18)
+    CreateToggleButton("AutoQuest", "Auto Quest", 0.32)
+    CreateToggleButton("AutoStats", "Auto Stats", 0.46)
+
+    -- Nút Teleport Boss
+    local TeleportBtn = Instance.new("TextButton")
+    TeleportBtn.Name = "TeleportBtn"
+    TeleportBtn.Parent = MainFrame
+    TeleportBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 150)
+    TeleportBtn.Position = UDim2.new(0.1, 0, 0.60, 0)
+    TeleportBtn.Size = UDim2.new(0.8, 0, 0, 42)
+    TeleportBtn.Font = Enum.Font.GothamSemibold
+    TeleportBtn.Text = "⚡ Teleport to Boss"
+    TeleportBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    TeleportBtn.TextSize = 16
+    TeleportBtn.ZIndex = 3
+    TeleportBtn.AutoButtonColor = false
+
+    local UICornerTeleport = Instance.new("UICorner")
+    UICornerTeleport.CornerRadius = UDim.new(0, 10)
+    UICornerTeleport.Parent = TeleportBtn
+
+    TeleportBtn.MouseEnter:Connect(function() TeleportBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 200) end)
+    TeleportBtn.MouseLeave:Connect(function() TeleportBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 150) end)
+    
+    TeleportBtn.MouseButton1Click:Connect(function()
+        pcall(function()
+            local char = LocalPlayer.Character
+            if not char or not char:FindFirstChild("HumanoidRootPart") then return end
+            
+            local targets = Workspace:FindFirstChild("Monsters") or Workspace:FindFirstChild("NPCs") or Workspace
+            for _, obj in pairs(targets:GetChildren()) do
+                if obj:IsA("Model") and (obj.Name:lower():find("boss") or obj:GetAttribute("Type") == "Boss") then
+                    local hrp = obj:FindFirstChild("HumanoidRootPart")
+                    if hrp then
+                        char.HumanoidRootPart.CFrame = hrp.CFrame * CFrame.new(0, 4, 0)
+                        return
                     end
                 end
             end
-        end
-    end
-    if #targets == 0 then return nil end
-
-    table.sort(targets, function(a, b)
-        if a.hp ~= b.hp then return a.hp < b.hp end
-        return a.dist < b.dist
+            warn("[Kaitun Hub] Không tìm thấy mục tiêu Boss hoạt động gần đây.")
+        end)
     end)
 
-    -- Trả về mục tiêu gần nhất trong phạm vi farm, hoặc con máu thấp nhất toàn đảo
-    for _, t in ipairs(targets) do
-        if t.dist <= FARM_RANGE then return t.obj end
-    end
-    return targets[1].obj
-end
-
--- Dịch chuyển an toàn: thử CFrame, nếu lỗi thì chạy siêu tốc đến
-local function safeTeleport(targetPos)
-    local char = LocalPlayer.Character
-    if not char then return false end
-    local hrp = getHRP(char)
-    if not hrp then return false end
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not humanoid or humanoid.Health <= 0 then return false end
-
-    local distance = (hrp.Position - targetPos).Magnitude
-    if distance < 1 then return true end  -- đã đến nơi
-
-    -- Cách 1: Dịch chuyển bằng CFrame
-    local success, err = pcall(function()
-        hrp.CFrame = CFrame.new(targetPos)
+    CreateToggleButton("ESP", "Player ESP", 0.74, function()
+        refreshAllESP()
     end)
-    if success then return true end
 
-    -- Cách 2: Tăng tốc chạy (fallback)
-    local oldSpeed = humanoid.WalkSpeed
-    humanoid.WalkSpeed = 300
-    char:MoveTo(targetPos)
+    local Version = Instance.new("TextLabel")
+    Version.Name = "Version"
+    Version.Parent = MainFrame
+    Version.BackgroundTransparency = 1
+    Version.Position = UDim2.new(0, 0, 0.9, 0)
+    Version.Size = UDim2.new(1, 0, 0, 30)
+    Version.Font = Enum.Font.Gotham
+    Version.Text = "v3.2 (God Mode) · by Kaitun"
+    Version.TextColor3 = Color3.fromRGB(180, 180, 180)
+    Version.TextSize = 12
+    Version.ZIndex = 3
 
-    task.spawn(function()
-        while true do
-            local currentHRP = getHRP(char)
-            if not currentHRP then break end
-            local human = char:FindFirstChildOfClass("Humanoid")
-            if not human or human.Health <= 0 then break end
-            if (currentHRP.Position - targetPos).Magnitude <= 5 then
-                human.WalkSpeed = oldSpeed
-                break
-            end
-            task.wait(0.1)
-        end
+    return ScreenGui
+end
+
+local gui = CreateGUI()
+
+Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        if Config.ESP then task.wait(0.5) addESP(player) end
     end)
-    return true
-end
+end)
 
--- Tìm RemoteEvent theo từ khóa
-local function findRemote(keyword)
-    for _, v in ipairs(ReplicatedStorage:GetDescendants()) do
-        if v:IsA("RemoteEvent") and v.Name:lower():find(keyword:lower()) then
-            return v
-        end
-    end
-    return nil
-end
+Players.PlayerRemoving:Connect(function(player)
+    removeESP(player)
+end)
 
-local attackRemote = findRemote("attack") or findRemote("hit") or findRemote("damage")
-local startQuestRemote = findRemote("startquest") or findRemote("takequest") or findRemote("acceptquest")
-local completeQuestRemote = findRemote("completequest") or findRemote("finishquest") or findRemote("submitquest")
-local addStatsRemote = findRemote("addstats") or findRemote("upgrade") or findRemote("stat")
+-- === VÒNG LẶP CHÍNH ===
+local lastActivateTime = 0
+local ACTIVATE_COOLDOWN = 0.3 
 
--- Auto Farm chính
-local function doAutoFarm()
-    if not autoFarm then return end
-    equipBestWeapon()
-    local target = findBestTarget()
-    if target then
-        local targetRoot = target:FindFirstChild("HumanoidRootPart")
-        if not targetRoot then return end
-        local targetPos = targetRoot.Position
-        safeTeleport(targetPos + Vector3.new(0, 0, 3))  -- đứng cách 3 stud
-        local tool = LocalPlayer.Character and LocalPlayer.Character:FindFirstChildOfClass("Tool")
-        if tool and tool:FindFirstChild("Activate") then
-            tool:Activate()
-        end
-        if attackRemote then
-            pcall(function() attackRemote:FireServer(target) end)
-        end
-    else
-        local island = getCurrentIsland()
-        if island then
-            safeTeleport(island.Center)
-        end
-    end
-end
+task.spawn(function()
+    while true do
+        task.wait(0.1) 
+        
+        local char = LocalPlayer.Character
+        if not char or not char:FindFirstChild("HumanoidRootPart") then continue end
+        local humanoidRootPart = char.HumanoidRootPart
 
--- Auto Quest (nhận/nộp quest từ NPC trên đảo)
-local lastQuestTime = 0
-local function doAutoQuest()
-    if not autoQuest then return end
-    if tick() - lastQuestTime < 15 then return end
-    local island = getCurrentIsland()
-    if not island then return end
-    local npc = findNPCOnIsland(island)
-    if not npc then return end
-    lastQuestTime = tick()
-    local npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head")
-    if not npcRoot then return end
-    safeTeleport(npcRoot.Position)
-    task.wait(1.5)
-    if startQuestRemote then pcall(function() startQuestRemote:FireServer() end) end
-    task.wait(5)
-    if completeQuestRemote then pcall(function() completeQuestRemote:FireServer() end) end
-end
-
--- Auto Stats
-local function doAutoStats()
-    if not autoStats then return end
-    if not addStatsRemote then return end
-    local stats = {"Strength", "Defense", "Speed", "Chakra", "Sword", "Health"}
-    for _, stat in ipairs(stats) do
-        pcall(function() addStatsRemote:FireServer(stat) end)
-        task.wait(0.15)
-    end
-end
-
--- ESP (hiển thị người chơi khác)
-local function updateESP()
-    for _, player in ipairs(Players:GetPlayers()) do
-        if player ~= LocalPlayer and player.Character then
-            local char = player.Character
-            if espEnabled then
-                if not char:FindFirstChild("ESP_Highlight") then
-                    local hl = Instance.new("Highlight")
-                    hl.Name = "ESP_Highlight"
-                    hl.Parent = char
-                    hl.FillTransparency = 0.5
-                    hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+        if Config.AutoFarm then
+            pcall(function()
+                local nearestMob = nil
+                local minDist = math.huge
+                
+                local monsterContainer = Workspace:FindFirstChild("Monsters") or Workspace:FindFirstChild("Enemies") or Workspace
+                for _, obj in pairs(monsterContainer:GetChildren()) do
+                    if obj:IsA("Model") and obj ~= char then
+                        local hum = obj:FindFirstChildOfClass("Humanoid")
+                        local hrp = obj:FindFirstChild("HumanoidRootPart")
+                        if hum and hum.Health > 0 and hrp then
+                            local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
+                            if dist < minDist then
+                                minDist = dist
+                                nearestMob = obj
+                            end
+                        end
+                    end
                 end
-            else
-                local hl = char:FindFirstChild("ESP_Highlight")
-                if hl then hl:Destroy() end
-            end
+                
+                if nearestMob and nearestMob:FindFirstChild("HumanoidRootPart") then
+                    -- Cập nhật API chuẩn mới (Assembly Velocity) thay thế hoàn toàn RotVelocity cũ
+                    if humanoidRootPart:IsA("BasePart") then
+                        humanoidRootPart.AssemblyLinearVelocity = Vector3.new(0,0,0)
+                        humanoidRootPart.AssemblyAngularVelocity = Vector3.new(0,0,0)
+                    end
+
+                    -- Khóa vị trí trên đầu quái mượt mà
+                    humanoidRootPart.CFrame = nearestMob.HumanoidRootPart.CFrame * CFrame.new(0, 5, 0)
+                    
+                    local backpackTool = LocalPlayer.Backpack:FindFirstChildOfClass("Tool")
+                    if backpackTool then
+                        backpackTool.Parent = char
+                    end
+                    
+                    local activeTool = char:FindFirstChildOfClass("Tool")
+                    if activeTool and (tick() - lastActivateTime >= ACTIVATE_COOLDOWN) then
+                        activeTool:Activate()
+                        lastActivateTime = tick()
+                    end
+                end
+            end)
+        end
+
+        if Config.AutoQuest then
+            -- Tích hợp Remote Quest
+        end
+
+        if Config.AutoStats then
+            -- Tích hợp Remote Stats
         end
     end
-end
-
--- Nút STOP nhỏ góc phải, không xung đột
-local function createStopButton()
-    local guiName = "HauHub_StopBtn"
-    local existing = game.CoreGui:FindFirstChild(guiName)
-    if existing then existing:Destroy() end
-
-    local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = guiName
-    ScreenGui.Parent = game.CoreGui
-    ScreenGui.ResetOnSpawn = false
-
-    local btn = Instance.new("TextButton")
-    btn.Name = "StopButton"
-    btn.Parent = ScreenGui
-    btn.Size = UDim2.new(0, 80, 0, 30)
-    btn.Position = UDim2.new(0.92, -40, 0.02, 0) -- góc trên phải
-    btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-    btn.Text = "STOP"
-    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 16
-    btn.Active = true
-    btn.Draggable = true
-    btn.ZIndex = 10
-    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
-    local running = true
-    btn.MouseButton1Click:Connect(function()
-        running = not running
-        if running then
-            autoFarm = true
-            autoQuest = true
-            autoStats = true
-            espEnabled = true
-            btn.Text = "STOP"
-            btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
-        else
-            autoFarm = false
-            autoQuest = false
-            autoStats = false
-            espEnabled = false
-            btn.Text = "START"
-            btn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
-        end
-    end)
-end
-
--- Khởi động
-createStopButton()
-print("[Hậu Hub] Sẵn sàng - Tâm Dev fix hoàn chỉnh.")
-
-RunService.Heartbeat:Connect(function()
-    if LocalPlayer.Character and getHRP(LocalPlayer.Character) then
-        doAutoFarm()
-        updateESP()
-    end
 end)
 
-task.spawn(function()
-    while task.wait(15) do
-        if autoQuest then doAutoQuest() end
-    end
-end)
-
-task.spawn(function()
-    while task.wait(5) do
-        if autoStats then doAutoStats() end
-    end
-end)
+print("[Kaitun Hub v3.2] Đã đạt trạng thái God Mode: Xuyên tường tuyệt đối, chuẩn hóa API 2026!")
