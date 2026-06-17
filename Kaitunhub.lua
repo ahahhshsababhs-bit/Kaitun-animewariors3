@@ -1,257 +1,310 @@
 --[[
-    Kaitun Hub - Anime Warriors 3 Script (UI Anime Theme)
-    Giao diện: Nền anime, nút toggle hiện đại.
-    Chức năng: Auto Farm, Auto Quest, Auto Stats, Teleport Boss, ESP.
+    Kaitun Hub - Anime Warriors 3 (Fixed & Enhanced)
+    Phiên bản: 3.0
+    Tác giả: Kaituncuahau
+    Tự động dò RemoteEvent, fix lỗi không hoạt động.
 --]]
 
+-- Dịch vụ
 local Players = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 local Workspace = game:GetService("Workspace")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
--- Cấu hình
-local ANIME_BG_IMAGE = "rbxassetid://7483861177" -- ID ảnh nền anime (có thể thay đổi)
+-- Ảnh nền anime (có thể thay ID)
+local ANIME_BG_IMAGE = "rbxassetid://7483861177"
 
--- Trạng thái bật/tắt
-local autoFarmEnabled = false
-local autoQuestEnabled = false
-local autoStatsEnabled = false
+-- Trạng thái
+local autoFarm = false
+local autoQuest = false
+local autoStats = false
 local espEnabled = false
 
--- Tạo giao diện chính
-local function CreateGUI()
+-- Tự động dò RemoteEvent theo tên gần đúng
+local function findRemote(keyword)
+    for _, v in pairs(ReplicatedStorage:GetDescendants()) do
+        if v:IsA("RemoteEvent") and v.Name:lower():find(keyword:lower()) then
+            return v
+        end
+    end
+    return nil
+end
+
+local attackRemote = findRemote("attack") or findRemote("hit") or findRemote("damage")
+local startQuestRemote = findRemote("startquest") or findRemote("takequest") or findRemote("acceptquest")
+local completeQuestRemote = findRemote("completequest") or findRemote("finishquest") or findRemote("submitquest")
+local addStatsRemote = findRemote("addstats") or findRemote("upgrade") or findRemote("stat")
+
+-- Tìm NPC quest
+local function findQuestNPC()
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v:FindFirstChild("Head") then
+            local name = v.Name:lower()
+            if name:find("quest") or name:find("npc") or name:find("giver") then
+                return v
+            end
+        end
+    end
+    -- Fallback: tìm bất kỳ NPC nào đứng yên
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v:FindFirstChild("Humanoid") and v:FindFirstChild("Head") and not Players:GetPlayerFromCharacter(v) then
+            return v
+        end
+    end
+    return nil
+end
+
+-- Tìm Boss
+local function findBoss()
+    for _, v in pairs(Workspace:GetDescendants()) do
+        if v:IsA("Model") and v.Name:lower():find("boss") and v:FindFirstChild("HumanoidRootPart") then
+            return v
+        end
+    end
+    return nil
+end
+
+-- Tìm quái gần nhất (không phải người chơi, có Humanoid, có HumanoidRootPart)
+local function getNearestMob()
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+
+    local nearest, minDist = nil, math.huge
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= char and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            local hum = obj.Humanoid
+            if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
+                local dist = (obj.HumanoidRootPart.Position - root.Position).Magnitude
+                if dist < minDist then
+                    minDist = dist
+                    nearest = obj
+                end
+            end
+        end
+    end
+    return nearest
+end
+
+-- Auto Farm
+local function doAutoFarm()
+    if not autoFarm then return end
+    local mob = getNearestMob()
+    if mob then
+        LocalPlayer.Character:MoveTo(mob.HumanoidRootPart.Position)
+        -- Dùng tool
+        local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
+        if tool and tool:FindFirstChild("Activate") then
+            tool:Activate()
+        end
+        -- Gửi remote tấn công nếu có
+        if attackRemote then
+            pcall(function() attackRemote:FireServer(mob) end)
+        end
+    end
+end
+
+-- Auto Quest
+local lastQuestTime = 0
+local function doAutoQuest()
+    if not autoQuest then return end
+    if tick() - lastQuestTime < 10 then return end -- Mỗi 10s làm 1 lần
+    lastQuestTime = tick()
+
+    local npc = findQuestNPC()
+    if not npc then return end
+    local npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head")
+    if not npcRoot then return end
+
+    LocalPlayer.Character:MoveTo(npcRoot.Position)
+    wait(1) -- Đợi đến nơi
+    if startQuestRemote then
+        pcall(function() startQuestRemote:FireServer() end)
+        print("[Kaitun] Đã gửi yêu cầu nhận quest")
+    end
+    wait(3) -- Giả lập thời gian làm quest
+    if completeQuestRemote then
+        pcall(function() completeQuestRemote:FireServer() end)
+        print("[Kaitun] Đã gửi yêu cầu nộp quest")
+    end
+end
+
+-- Auto Stats
+local function doAutoStats()
+    if not autoStats then return end
+    if not addStatsRemote then return end
+    -- Gửi tăng từng chỉ số ưu tiên
+    local stats = {"Strength", "Defense", "Speed", "Chakra", "Sword", "Health"}
+    for _, stat in ipairs(stats) do
+        pcall(function() addStatsRemote:FireServer(stat) end)
+        wait(0.1)
+    end
+end
+
+-- ESP
+local function updateESP()
+    for _, player in pairs(Players:GetPlayers()) do
+        if player ~= LocalPlayer and player.Character then
+            local char = player.Character
+            if espEnabled then
+                if not char:FindFirstChild("ESP_Highlight") then
+                    local hl = Instance.new("Highlight")
+                    hl.Name = "ESP_Highlight"
+                    hl.Parent = char
+                    hl.FillTransparency = 0.5
+                    hl.OutlineColor = Color3.fromRGB(255, 0, 0)
+                end
+            else
+                local hl = char:FindFirstChild("ESP_Highlight")
+                if hl then hl:Destroy() end
+            end
+        end
+    end
+end
+
+-- Teleport Boss
+local function teleportToBoss()
+    local boss = findBoss()
+    if boss and LocalPlayer.Character then
+        LocalPlayer.Character:MoveTo(boss.HumanoidRootPart.Position)
+    end
+end
+
+-- ====== GIAO DIỆN ======
+local function createGUI()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "KaitunHub"
     ScreenGui.Parent = game.CoreGui
     ScreenGui.ResetOnSpawn = false
 
-    -- Khung chính
-    local MainFrame = Instance.new("Frame")
-    MainFrame.Name = "MainFrame"
-    MainFrame.Parent = ScreenGui
-    MainFrame.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-    MainFrame.BackgroundTransparency = 0.1
-    MainFrame.Position = UDim2.new(0.1, 0, 0.15, 0)
-    MainFrame.Size = UDim2.new(0, 280, 0, 420)
-    MainFrame.Active = true
-    MainFrame.Draggable = true
-    MainFrame.ClipsDescendants = true -- Ảnh nền không tràn ra ngoài
+    local Main = Instance.new("Frame")
+    Main.Name = "Main"
+    Main.Parent = ScreenGui
+    Main.Size = UDim2.new(0, 300, 0, 430)
+    Main.Position = UDim2.new(0.05, 0, 0.1, 0)
+    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+    Main.BackgroundTransparency = 0.1
+    Main.Active = true
+    Main.Draggable = true
+    Main.ClipsDescendants = true
+    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
 
-    -- Bo góc cho frame
-    local UICorner = Instance.new("UICorner")
-    UICorner.CornerRadius = UDim.new(0, 12)
-    UICorner.Parent = MainFrame
+    -- BG anime
+    local img = Instance.new("ImageLabel")
+    img.Parent = Main
+    img.Size = UDim2.new(1, 0, 1, 0)
+    img.Image = ANIME_BG_IMAGE
+    img.ScaleType = Enum.ScaleType.Crop
+    img.BackgroundTransparency = 1
+    img.ZIndex = 1
 
-    -- Ảnh nền anime
-    local AnimeBG = Instance.new("ImageLabel")
-    AnimeBG.Name = "AnimeBG"
-    AnimeBG.Parent = MainFrame
-    AnimeBG.BackgroundTransparency = 1
-    AnimeBG.Size = UDim2.new(1, 0, 1, 0)
-    AnimeBG.Position = UDim2.new(0, 0, 0, 0)
-    AnimeBG.Image = ANIME_BG_IMAGE
-    AnimeBG.ScaleType = Enum.ScaleType.Crop
-    AnimeBG.ZIndex = 1
+    -- Overlay
+    local ov = Instance.new("Frame")
+    ov.Parent = Main
+    ov.Size = UDim2.new(1, 0, 1, 0)
+    ov.BackgroundColor3 = Color3.fromRGB(0,0,0)
+    ov.BackgroundTransparency = 0.5
+    ov.ZIndex = 2
 
-    -- Lớp phủ mờ để chữ dễ đọc
-    local Overlay = Instance.new("Frame")
-    Overlay.Name = "Overlay"
-    Overlay.Parent = MainFrame
-    Overlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-    Overlay.BackgroundTransparency = 0.5
-    Overlay.Size = UDim2.new(1, 0, 1, 0)
-    Overlay.ZIndex = 2
+    -- Title
+    local title = Instance.new("TextLabel")
+    title.Parent = Main
+    title.Size = UDim2.new(1,0,0,45)
+    title.BackgroundTransparency = 1
+    title.Font = Enum.Font.GothamBold
+    title.Text = "⚔️ KAITUN HUB ⚔️"
+    title.TextColor3 = Color3.fromRGB(255,215,0)
+    title.TextSize = 22
+    title.ZIndex = 3
 
-    -- Tiêu đề
-    local Title = Instance.new("TextLabel")
-    Title.Name = "Title"
-    Title.Parent = MainFrame
-    Title.BackgroundTransparency = 1
-    Title.Size = UDim2.new(1, 0, 0, 50)
-    Title.Font = Enum.Font.GothamBold
-    Title.Text = "⚔️ Kaitun Hub ⚔️"
-    Title.TextColor3 = Color3.fromRGB(255, 215, 0)
-    Title.TextSize = 22
-    Title.TextStrokeTransparency = 0.5
-    Title.ZIndex = 3
+    local function makeToggle(name, y, startState, callback)
+        local btn = Instance.new("TextButton")
+        btn.Parent = Main
+        btn.Position = UDim2.new(0.1, 0, y, 0)
+        btn.Size = UDim2.new(0.8, 0, 0, 40)
+        btn.BackgroundColor3 = startState and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
+        btn.Text = name .. ": " .. (startState and "ON" or "OFF")
+        btn.TextColor3 = Color3.fromRGB(255,255,255)
+        btn.Font = Enum.Font.GothamSemibold
+        btn.TextSize = 16
+        btn.ZIndex = 3
+        btn.AutoButtonColor = false
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
 
-    -- Hàm tạo nút toggle đẹp
-    local function CreateToggleButton(name, posY, defaultState, callback)
-        local Button = Instance.new("TextButton")
-        Button.Name = name
-        Button.Parent = MainFrame
-        Button.BackgroundColor3 = defaultState and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
-        Button.Position = UDim2.new(0.1, 0, posY, 0)
-        Button.Size = UDim2.new(0.8, 0, 0, 42)
-        Button.Font = Enum.Font.GothamSemibold
-        Button.Text = name .. ": " .. (defaultState and "ON" or "OFF")
-        Button.TextColor3 = Color3.fromRGB(255, 255, 255)
-        Button.TextSize = 16
-        Button.ZIndex = 3
-        Button.AutoButtonColor = false
-
-        local UICornerBtn = Instance.new("UICorner")
-        UICornerBtn.CornerRadius = UDim.new(0, 10)
-        UICornerBtn.Parent = Button
-
-        -- Hiệu ứng di chuột
-        Button.MouseEnter:Connect(function()
-            Button.BackgroundColor3 = defaultState and Color3.fromRGB(46, 160, 46) or Color3.fromRGB(200, 50, 50)
+        local state = startState
+        btn.MouseButton1Click:Connect(function()
+            state = not state
+            btn.Text = name .. ": " .. (state and "ON" or "OFF")
+            btn.BackgroundColor3 = state and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
+            callback(state)
         end)
-        Button.MouseLeave:Connect(function()
-            Button.BackgroundColor3 = defaultState and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
+        btn.MouseEnter:Connect(function()
+            btn.BackgroundColor3 = state and Color3.fromRGB(50,180,50) or Color3.fromRGB(200,60,60)
         end)
-
-        Button.MouseButton1Click:Connect(function()
-            local newState = not defaultState
-            defaultState = newState
-            Button.Text = name .. ": " .. (newState and "ON" or "OFF")
-            Button.BackgroundColor3 = newState and Color3.fromRGB(34, 139, 34) or Color3.fromRGB(178, 34, 34)
-            callback(newState)
+        btn.MouseLeave:Connect(function()
+            btn.BackgroundColor3 = state and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
         end)
-
-        return Button
+        return btn
     end
 
-    -- Tạo các nút toggle
-    CreateToggleButton("Auto Farm", 0.18, autoFarmEnabled, function(state)
-        autoFarmEnabled = state
-    end)
+    makeToggle("Auto Farm", 0.18, false, function(v) autoFarm = v end)
+    makeToggle("Auto Quest", 0.32, false, function(v) autoQuest = v end)
+    makeToggle("Auto Stats", 0.46, false, function(v) autoStats = v end)
 
-    CreateToggleButton("Auto Quest", 0.32, autoQuestEnabled, function(state)
-        autoQuestEnabled = state
-    end)
+    -- Teleport
+    local teleBtn = Instance.new("TextButton")
+    teleBtn.Parent = Main
+    teleBtn.Position = UDim2.new(0.1,0,0.6,0)
+    teleBtn.Size = UDim2.new(0.8,0,0,40)
+    teleBtn.BackgroundColor3 = Color3.fromRGB(70,70,150)
+    teleBtn.Text = "⚡ Teleport to Boss"
+    teleBtn.TextColor3 = Color3.fromRGB(255,255,255)
+    teleBtn.Font = Enum.Font.GothamSemibold
+    teleBtn.TextSize = 16
+    teleBtn.ZIndex = 3
+    teleBtn.AutoButtonColor = false
+    Instance.new("UICorner", teleBtn).CornerRadius = UDim.new(0, 8)
+    teleBtn.MouseButton1Click:Connect(teleportToBoss)
+    teleBtn.MouseEnter:Connect(function() teleBtn.BackgroundColor3 = Color3.fromRGB(100,100,200) end)
+    teleBtn.MouseLeave:Connect(function() teleBtn.BackgroundColor3 = Color3.fromRGB(70,70,150) end)
 
-    CreateToggleButton("Auto Stats", 0.46, autoStatsEnabled, function(state)
-        autoStatsEnabled = state
-    end)
+    makeToggle("Player ESP", 0.74, false, function(v) espEnabled = v end)
 
-    -- Nút Teleport đặc biệt
-    local TeleportBtn = Instance.new("TextButton")
-    TeleportBtn.Name = "TeleportBtn"
-    TeleportBtn.Parent = MainFrame
-    TeleportBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 150)
-    TeleportBtn.Position = UDim2.new(0.1, 0, 0.60, 0)
-    TeleportBtn.Size = UDim2.new(0.8, 0, 0, 42)
-    TeleportBtn.Font = Enum.Font.GothamSemibold
-    TeleportBtn.Text = "⚡ Teleport to Boss"
-    TeleportBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-    TeleportBtn.TextSize = 16
-    TeleportBtn.ZIndex = 3
-    TeleportBtn.AutoButtonColor = false
-
-    local UICornerTeleport = Instance.new("UICorner")
-    UICornerTeleport.CornerRadius = UDim.new(0, 10)
-    UICornerTeleport.Parent = TeleportBtn
-
-    TeleportBtn.MouseEnter:Connect(function()
-        TeleportBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
-    end)
-    TeleportBtn.MouseLeave:Connect(function()
-        TeleportBtn.BackgroundColor3 = Color3.fromRGB(70, 70, 150)
-    end)
-    TeleportBtn.MouseButton1Click:Connect(function()
-        -- Tìm boss và dịch chuyển
-        local boss = Workspace:FindFirstChild("Boss", true)
-        if boss and boss:IsA("Model") and boss:FindFirstChild("HumanoidRootPart") then
-            LocalPlayer.Character:MoveTo(boss.HumanoidRootPart.Position)
-        end
-    end)
-
-    -- Nút Player ESP
-    CreateToggleButton("Player ESP", 0.74, espEnabled, function(state)
-        espEnabled = state
-        if not state then
-            -- Xóa ESP khi tắt
-            for _, plr in pairs(Players:GetPlayers()) do
-                if plr.Character then
-                    local hl = plr.Character:FindFirstChild("ESP_Highlight")
-                    if hl then hl:Destroy() end
-                end
-            end
-        end
-    end)
-
-    -- Nhãn phiên bản
-    local Version = Instance.new("TextLabel")
-    Version.Name = "Version"
-    Version.Parent = MainFrame
-    Version.BackgroundTransparency = 1
-    Version.Position = UDim2.new(0, 0, 0.9, 0)
-    Version.Size = UDim2.new(1, 0, 0, 30)
-    Version.Font = Enum.Font.Gotham
-    Version.Text = "v1.0 · by Kaitun"
-    Version.TextColor3 = Color3.fromRGB(180, 180, 180)
-    Version.TextSize = 12
-    Version.ZIndex = 3
-
-    return ScreenGui
+    local ver = Instance.new("TextLabel")
+    ver.Parent = Main
+    ver.Position = UDim2.new(0,0,0.92,0)
+    ver.Size = UDim2.new(1,0,0,25)
+    ver.BackgroundTransparency = 1
+    ver.Font = Enum.Font.Gotham
+    ver.Text = "v3.0 · fixed by Kaitun"
+    ver.TextColor3 = Color3.fromRGB(180,180,180)
+    ver.TextSize = 12
+    ver.ZIndex = 3
 end
 
--- Khởi tạo GUI
-local gui = CreateGUI()
+-- Khởi tạo
+createGUI()
+print("[Kaitun] GUI loaded. Remote tìm thấy: Attack="..tostring(attackRemote~=nil).." QuestStart="..tostring(startQuestRemote~=nil).." QuestComplete="..tostring(completeQuestRemote~=nil).." AddStats="..tostring(addStatsRemote~=nil))
 
--- Vòng lặp chức năng chính
+-- Vòng lặp chính
 RunService.Heartbeat:Connect(function()
-    local char = LocalPlayer.Character
-    if not char then return end
-    local humanoidRootPart = char:FindFirstChild("HumanoidRootPart")
-    if not humanoidRootPart then return end
-
-    -- Auto Farm
-    if autoFarmEnabled then
-        local nearestMob = nil
-        local minDist = math.huge
-        for _, obj in pairs(Workspace:GetChildren()) do
-            if obj:IsA("Model") and obj ~= char then
-                local hum = obj:FindFirstChild("Humanoid")
-                local hrp = obj:FindFirstChild("HumanoidRootPart")
-                if hum and hum.Health > 0 and hrp then
-                    local dist = (hrp.Position - humanoidRootPart.Position).Magnitude
-                    if dist < minDist then
-                        minDist = dist
-                        nearestMob = obj
-                    end
-                end
-            end
-        end
-        if nearestMob and nearestMob:FindFirstChild("HumanoidRootPart") then
-            char:MoveTo(nearestMob.HumanoidRootPart.Position)
-            -- Kích hoạt vũ khí nếu có
-            local tool = char:FindFirstChildOfClass("Tool")
-            if tool and tool:FindFirstChild("Activate") then
-                tool:Activate()
-            end
-        end
-    end
-
-    -- Auto Quest (placeholder – cần custom theo game)
-    if autoQuestEnabled then
-        -- Ở đây có thể thêm logic nhận/nộp quest thông qua RemoteEvent
-        -- Hiện tại để trống
-    end
-
-    -- Auto Stats (placeholder)
-    if autoStatsEnabled then
-        -- Logic tăng chỉ số, ví dụ: game:GetService("ReplicatedStorage"):FindFirstChild("AddStats"):FireServer("Strength")
-    end
-
-    -- Player ESP
-    if espEnabled then
-        for _, player in pairs(Players:GetPlayers()) do
-            if player ~= LocalPlayer and player.Character then
-                local existing = player.Character:FindFirstChild("ESP_Highlight")
-                if not existing then
-                    local highlight = Instance.new("Highlight")
-                    highlight.Name = "ESP_Highlight"
-                    highlight.Parent = player.Character
-                    highlight.FillTransparency = 0.4
-                    highlight.OutlineColor = Color3.fromRGB(255, 80, 80)
-                    highlight.OutlineTransparency = 0.3
-                end
-            end
-        end
+    if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
+        doAutoFarm()
+        updateESP()
     end
 end)
 
-print("[Kaitun Hub] Giao diện Anime đã sẵn sàng!")
+-- Timer riêng cho quest và stats (không spam)
+spawn(function()
+    while wait(10) do
+        if autoQuest then doAutoQuest() end
+    end
+end)
+
+spawn(function()
+    while wait(5) do
+        if autoStats then doAutoStats() end
+    end
+end)
