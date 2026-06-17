@@ -1,10 +1,11 @@
 --[[
-    Kaitun Hub - Anime Warriors 3 (One Button Auto Pilot)
-    Phiên bản: 6.0
-    Tác giả: Kaitun
-    - Tự động chạy tất cả khi load script (Farm, Quest, Stats, ESP).
-    - Một nút STOP nhỏ ở góc phải để dừng/tiếp tục mọi thứ.
-    - Tự động cầm vũ khí, ưu tiên đánh quái máu thấp nhất trên đảo hiện tại.
+    Hậu Hub - Anime Warriors 3 (Instant Teleport Farm)
+    Phiên bản: 6.4
+    Tác giả: Hậu
+    - Tự động chạy tất cả khi load script.
+    - Dịch chuyển tức thời đến quái, ưu tiên máu thấp.
+    - Danh sách đảo: Planet Nemak, Future City, Sand Village, Sky Island, Rain Village, Soul District.
+    - Một nút STOP nhỏ ở góc phải.
     - Cần cập nhật tọa độ thực của các đảo trong bảng ISLANDS.
 --]]
 
@@ -15,17 +16,16 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
 -- ================== CẤU HÌNH ==================
-local FARM_RANGE = 250  -- Phạm vi tìm quái (có thể sửa trực tiếp)
+local FARM_RANGE = 250  -- Phạm vi tìm quái (có thể sửa)
 
 -- ================== HỆ THỐNG ĐẢO (CẦN TỌA ĐỘ THỰC TẾ) ==================
 local ISLANDS = {
-    {Name = "Starter Island",     Center = Vector3.new(0, 50, 0),    Radius = 200},
-    {Name = "Sand Village",       Center = Vector3.new(500, 50, 0),  Radius = 250},
-    {Name = "Leaf Village",       Center = Vector3.new(-500, 50, 0), Radius = 250},
-    {Name = "Cloud Village",      Center = Vector3.new(0, 300, 500), Radius = 200},
-    {Name = "Mist Village",       Center = Vector3.new(0, 50, -500), Radius = 200},
-    {Name = "War Zone",           Center = Vector3.new(1000, 50, 1000), Radius = 300},
-    {Name = "Training Grounds",   Center = Vector3.new(-1000, 50, -1000), Radius = 250},
+    {Name = "Planet Nemak",    Center = Vector3.new(0, 50, 0),    Radius = 300},
+    {Name = "Future City",     Center = Vector3.new(500, 50, 500), Radius = 300},
+    {Name = "Sand Village",    Center = Vector3.new(-500, 50, -500), Radius = 300},
+    {Name = "Sky Island",      Center = Vector3.new(0, 500, 0),   Radius = 250},
+    {Name = "Rain Village",    Center = Vector3.new(1000, 50, -1000), Radius = 300},
+    {Name = "Soul District",   Center = Vector3.new(-1000, 50, 1000), Radius = 300},
 }
 
 -- Trạng thái (mặc định bật tất cả)
@@ -129,23 +129,41 @@ local function findBestTarget()
         if obj:IsA("Model") and obj ~= char and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
             local hum = obj.Humanoid
             if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
-                local objPos = obj.HumanoidRootPart.Position
-                local distToCenter = (objPos - island.Center).Magnitude
-                if distToCenter <= island.Radius then
-                    local distToPlayer = (objPos - root.Position).Magnitude
-                    if distToPlayer <= FARM_RANGE then
+                local name = obj.Name:lower()
+                if not name:find("npc") and not name:find("quest") and not name:find("giver") then
+                    local objPos = obj.HumanoidRootPart.Position
+                    local distToCenter = (objPos - island.Center).Magnitude
+                    if distToCenter <= island.Radius then
+                        local distToPlayer = (objPos - root.Position).Magnitude
                         table.insert(targets, {obj = obj, hp = hum.Health, dist = distToPlayer})
                     end
                 end
             end
         end
     end
+
     if #targets == 0 then return nil end
+
     table.sort(targets, function(a, b)
-        if a.hp ~= b.hp then return a.hp < b.hp
-        else return a.dist < b.dist end
+        if a.hp ~= b.hp then return a.hp < b.hp end
+        return a.dist < b.dist
     end)
+
+    for _, t in ipairs(targets) do
+        if t.dist <= FARM_RANGE then
+            return t.obj
+        end
+    end
     return targets[1].obj
+end
+
+local function teleportTo(position)
+    local char = LocalPlayer.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if hrp then
+        hrp.CFrame = CFrame.new(position)
+    end
 end
 
 local function findRemote(keyword)
@@ -162,13 +180,14 @@ local startQuestRemote = findRemote("startquest") or findRemote("takequest") or 
 local completeQuestRemote = findRemote("completequest") or findRemote("finishquest") or findRemote("submitquest")
 local addStatsRemote = findRemote("addstats") or findRemote("upgrade") or findRemote("stat")
 
--- Auto Farm
 local function doAutoFarm()
     if not autoFarm then return end
     equipBestWeapon()
     local target = findBestTarget()
     if target then
-        LocalPlayer.Character:MoveTo(target.HumanoidRootPart.Position)
+        local targetPos = target.HumanoidRootPart.Position
+        local offset = (LocalPlayer.Character.HumanoidRootPart.Position - targetPos).unit * 3
+        teleportTo(targetPos + offset)
         local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
         if tool and tool:FindFirstChild("Activate") then
             tool:Activate()
@@ -176,10 +195,14 @@ local function doAutoFarm()
         if attackRemote then
             pcall(function() attackRemote:FireServer(target) end)
         end
+    else
+        local island = getCurrentIsland()
+        if island then
+            teleportTo(island.Center)
+        end
     end
 end
 
--- Auto Quest
 local lastQuestTime = 0
 local function doAutoQuest()
     if not autoQuest then return end
@@ -194,7 +217,7 @@ local function doAutoQuest()
     local npcRoot = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head")
     if not npcRoot then return end
 
-    LocalPlayer.Character:MoveTo(npcRoot.Position)
+    teleportTo(npcRoot.Position)
     wait(1.5)
 
     if startQuestRemote then
@@ -207,7 +230,6 @@ local function doAutoQuest()
     end
 end
 
--- Auto Stats
 local function doAutoStats()
     if not autoStats then return end
     if not addStatsRemote then return end
@@ -218,7 +240,6 @@ local function doAutoStats()
     end
 end
 
--- ESP
 local function updateESP()
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -242,7 +263,7 @@ end
 -- ================== GIAO DIỆN NÚT STOP ==================
 local function createStopButton()
     local ScreenGui = Instance.new("ScreenGui")
-    ScreenGui.Name = "KaitunHub"
+    ScreenGui.Name = "HauHub"
     ScreenGui.Parent = game.CoreGui
     ScreenGui.ResetOnSpawn = false
 
@@ -250,8 +271,8 @@ local function createStopButton()
     btn.Name = "StopButton"
     btn.Parent = ScreenGui
     btn.Size = UDim2.new(0, 80, 0, 30)
-    btn.Position = UDim2.new(0.92, -40, 0.02, 0) -- góc trên phải
-    btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50) -- đỏ
+    btn.Position = UDim2.new(0.92, -40, 0.02, 0)
+    btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
     btn.Text = "STOP"
     btn.TextColor3 = Color3.fromRGB(255, 255, 255)
     btn.Font = Enum.Font.GothamBold
@@ -285,9 +306,8 @@ end
 
 -- ================== KHỞI ĐỘNG ==================
 createStopButton()
-print("[Kaitun] Auto Pilot started. Press STOP button to pause.")
+print("[Hậu Hub] Instant Teleport Farm started. Press STOP to pause.")
 
--- Vòng lặp chính
 RunService.Heartbeat:Connect(function()
     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         doAutoFarm()
