@@ -1,8 +1,11 @@
 --[[
-    Kaitun Hub - Anime Warriors 3 (Island System - Real Island Names)
-    Phiên bản: 4.1
+    Kaitun Hub - Anime Warriors 3 (One Button Auto Pilot)
+    Phiên bản: 6.0
     Tác giả: Kaitun
-    ISLANDS đã được đặt tên theo map thực tế. Bạn cần cập nhật tọa độ Center và Radius!
+    - Tự động chạy tất cả khi load script (Farm, Quest, Stats, ESP).
+    - Một nút STOP nhỏ ở góc phải để dừng/tiếp tục mọi thứ.
+    - Tự động cầm vũ khí, ưu tiên đánh quái máu thấp nhất trên đảo hiện tại.
+    - Cần cập nhật tọa độ thực của các đảo trong bảng ISLANDS.
 --]]
 
 local Players = game:GetService("Players")
@@ -11,29 +14,27 @@ local Workspace = game:GetService("Workspace")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 
-local ANIME_BG_IMAGE = "rbxassetid://7483861177"
+-- ================== CẤU HÌNH ==================
+local FARM_RANGE = 250  -- Phạm vi tìm quái (có thể sửa trực tiếp)
 
-local autoFarm = false
-local autoQuest = false
-local autoStats = false
-local espEnabled = false
-
--- ================== HỆ THỐNG ĐẢO (CẬP NHẬT TỌA ĐỘ THỰC TẾ) ==================
--- Hướng dẫn lấy tọa độ: 
---   1. Đứng giữa đảo, mở executor chạy: print(game.Players.LocalPlayer.Character.HumanoidRootPart.Position)
---   2. Copy kết quả (dạng Vector3.new(x, y, z)) vào Center.
---   3. Ước lượng bán kính (khoảng cách từ tâm đến rìa đảo) và điền vào Radius.
+-- ================== HỆ THỐNG ĐẢO (CẦN TỌA ĐỘ THỰC TẾ) ==================
 local ISLANDS = {
-    {Name = "Starter Island",     Center = Vector3.new(0, 50, 0),    Radius = 200},  -- Đảo khởi đầu
-    {Name = "Sand Village",       Center = Vector3.new(500, 50, 0),  Radius = 250},  -- Làng Cát
-    {Name = "Leaf Village",       Center = Vector3.new(-500, 50, 0), Radius = 250},  -- Làng Lá
-    {Name = "Cloud Village",      Center = Vector3.new(0, 300, 500), Radius = 200},  -- Làng Mây
-    {Name = "Mist Village",       Center = Vector3.new(0, 50, -500), Radius = 200},  -- Làng Sương
-    {Name = "War Zone",           Center = Vector3.new(1000, 50, 1000), Radius = 300}, -- Khu vực chiến đấu
+    {Name = "Starter Island",     Center = Vector3.new(0, 50, 0),    Radius = 200},
+    {Name = "Sand Village",       Center = Vector3.new(500, 50, 0),  Radius = 250},
+    {Name = "Leaf Village",       Center = Vector3.new(-500, 50, 0), Radius = 250},
+    {Name = "Cloud Village",      Center = Vector3.new(0, 300, 500), Radius = 200},
+    {Name = "Mist Village",       Center = Vector3.new(0, 50, -500), Radius = 200},
+    {Name = "War Zone",           Center = Vector3.new(1000, 50, 1000), Radius = 300},
     {Name = "Training Grounds",   Center = Vector3.new(-1000, 50, -1000), Radius = 250},
-    -- Thêm đảo khác nếu có (VD: Boss Room, Event Island...)
 }
 
+-- Trạng thái (mặc định bật tất cả)
+local autoFarm = true
+local autoQuest = true
+local autoStats = true
+local espEnabled = true
+
+-- ================== CHỨC NĂNG ==================
 local function getCurrentIsland()
     if not LocalPlayer.Character or not LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         return nil
@@ -64,10 +65,7 @@ local function findNPCOnIsland(island)
                 if hrp then
                     local dist = (hrp.Position - island.Center).Magnitude
                     if dist <= island.Radius then
-                        local name = v.Name:lower()
-                        if name:find("quest") or name:find("npc") or name:find("giver") or true then
-                            table.insert(npcs, v)
-                        end
+                        table.insert(npcs, v)
                     end
                 end
             end
@@ -85,22 +83,69 @@ local function findNPCOnIsland(island)
     return npcs[1]
 end
 
-local function getQuestNPCForCurrentIsland()
-    local island = getCurrentIsland()
-    if island then
-        return findNPCOnIsland(island)
+local function equipBestWeapon()
+    local char = LocalPlayer.Character
+    if not char then return end
+    local backpack = LocalPlayer.Backpack
+    if not backpack then return end
+
+    local currentTool = char:FindFirstChildOfClass("Tool")
+    local tools = {}
+    for _, tool in pairs(backpack:GetChildren()) do
+        if tool:IsA("Tool") then table.insert(tools, tool) end
     end
-    return nil
+    if #tools == 0 and not currentTool then return end
+
+    table.sort(tools, function(a, b)
+        local dmgA = a:GetAttribute("Damage") or 0
+        local dmgB = b:GetAttribute("Damage") or 0
+        if dmgA ~= dmgB then return dmgA > dmgB end
+        local keywords = {"sword", "blade", "kunai", "shuriken", "rasengan", "chidori", "katana"}
+        local pA, pB = 0, 0
+        for i, kw in ipairs(keywords) do
+            if a.Name:lower():find(kw) then pA = math.max(pA, i) end
+            if b.Name:lower():find(kw) then pB = math.max(pB, i) end
+        end
+        if pA ~= pB then return pA > pB end
+        return #a.Name > #b.Name
+    end)
+
+    local bestTool = tools[1]
+    if currentTool == bestTool then return end
+    if currentTool then currentTool.Parent = backpack end
+    if bestTool then bestTool.Parent = char end
 end
 
-local function teleportToQuestNPC()
-    local npc = getQuestNPCForCurrentIsland()
-    if npc and LocalPlayer.Character then
-        local target = npc:FindFirstChild("HumanoidRootPart") or npc:FindFirstChild("Head")
-        if target then
-            LocalPlayer.Character:MoveTo(target.Position)
+local function findBestTarget()
+    local island = getCurrentIsland()
+    if not island then return nil end
+    local char = LocalPlayer.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if not root then return nil end
+
+    local targets = {}
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("Model") and obj ~= char and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
+            local hum = obj.Humanoid
+            if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
+                local objPos = obj.HumanoidRootPart.Position
+                local distToCenter = (objPos - island.Center).Magnitude
+                if distToCenter <= island.Radius then
+                    local distToPlayer = (objPos - root.Position).Magnitude
+                    if distToPlayer <= FARM_RANGE then
+                        table.insert(targets, {obj = obj, hp = hum.Health, dist = distToPlayer})
+                    end
+                end
+            end
         end
     end
+    if #targets == 0 then return nil end
+    table.sort(targets, function(a, b)
+        if a.hp ~= b.hp then return a.hp < b.hp
+        else return a.dist < b.dist end
+    end)
+    return targets[1].obj
 end
 
 local function findRemote(keyword)
@@ -117,43 +162,24 @@ local startQuestRemote = findRemote("startquest") or findRemote("takequest") or 
 local completeQuestRemote = findRemote("completequest") or findRemote("finishquest") or findRemote("submitquest")
 local addStatsRemote = findRemote("addstats") or findRemote("upgrade") or findRemote("stat")
 
-local function getNearestMob()
-    local char = LocalPlayer.Character
-    if not char then return nil end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if not root then return nil end
-
-    local nearest, minDist = nil, math.huge
-    for _, obj in pairs(Workspace:GetDescendants()) do
-        if obj:IsA("Model") and obj ~= char and obj:FindFirstChild("Humanoid") and obj:FindFirstChild("HumanoidRootPart") then
-            local hum = obj.Humanoid
-            if hum.Health > 0 and not Players:GetPlayerFromCharacter(obj) then
-                local dist = (obj.HumanoidRootPart.Position - root.Position).Magnitude
-                if dist < minDist then
-                    minDist = dist
-                    nearest = obj
-                end
-            end
-        end
-    end
-    return nearest
-end
-
+-- Auto Farm
 local function doAutoFarm()
     if not autoFarm then return end
-    local mob = getNearestMob()
-    if mob then
-        LocalPlayer.Character:MoveTo(mob.HumanoidRootPart.Position)
+    equipBestWeapon()
+    local target = findBestTarget()
+    if target then
+        LocalPlayer.Character:MoveTo(target.HumanoidRootPart.Position)
         local tool = LocalPlayer.Character:FindFirstChildOfClass("Tool")
         if tool and tool:FindFirstChild("Activate") then
             tool:Activate()
         end
         if attackRemote then
-            pcall(function() attackRemote:FireServer(mob) end)
+            pcall(function() attackRemote:FireServer(target) end)
         end
     end
 end
 
+-- Auto Quest
 local lastQuestTime = 0
 local function doAutoQuest()
     if not autoQuest then return end
@@ -181,6 +207,7 @@ local function doAutoQuest()
     end
 end
 
+-- Auto Stats
 local function doAutoStats()
     if not autoStats then return end
     if not addStatsRemote then return end
@@ -191,6 +218,7 @@ local function doAutoStats()
     end
 end
 
+-- ESP
 local function updateESP()
     for _, player in pairs(Players:GetPlayers()) do
         if player ~= LocalPlayer and player.Character then
@@ -211,166 +239,55 @@ local function updateESP()
     end
 end
 
-local function createGUI()
+-- ================== GIAO DIỆN NÚT STOP ==================
+local function createStopButton()
     local ScreenGui = Instance.new("ScreenGui")
     ScreenGui.Name = "KaitunHub"
     ScreenGui.Parent = game.CoreGui
     ScreenGui.ResetOnSpawn = false
 
-    local Main = Instance.new("Frame")
-    Main.Name = "Main"
-    Main.Parent = ScreenGui
-    Main.Size = UDim2.new(0, 320, 0, 480)
-    Main.Position = UDim2.new(0.05, 0, 0.08, 0)
-    Main.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
-    Main.BackgroundTransparency = 0.1
-    Main.Active = true
-    Main.Draggable = true
-    Main.ClipsDescendants = true
-    Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+    local btn = Instance.new("TextButton")
+    btn.Name = "StopButton"
+    btn.Parent = ScreenGui
+    btn.Size = UDim2.new(0, 80, 0, 30)
+    btn.Position = UDim2.new(0.92, -40, 0.02, 0) -- góc trên phải
+    btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50) -- đỏ
+    btn.Text = "STOP"
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 16
+    btn.Active = true
+    btn.Draggable = true
+    btn.ZIndex = 10
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
 
-    local img = Instance.new("ImageLabel")
-    img.Parent = Main
-    img.Size = UDim2.new(1, 0, 1, 0)
-    img.Image = ANIME_BG_IMAGE
-    img.ScaleType = Enum.ScaleType.Crop
-    img.BackgroundTransparency = 1
-    img.ZIndex = 1
+    local running = true
 
-    local ov = Instance.new("Frame")
-    ov.Parent = Main
-    ov.Size = UDim2.new(1, 0, 1, 0)
-    ov.BackgroundColor3 = Color3.fromRGB(0,0,0)
-    ov.BackgroundTransparency = 0.55
-    ov.ZIndex = 2
-
-    local title = Instance.new("TextLabel")
-    title.Parent = Main
-    title.Size = UDim2.new(1,0,0,45)
-    title.BackgroundTransparency = 1
-    title.Font = Enum.Font.GothamBold
-    title.Text = "⚔️ KAITUN HUB ⚔️"
-    title.TextColor3 = Color3.fromRGB(255,215,0)
-    title.TextSize = 22
-    title.ZIndex = 3
-
-    local function makeToggle(name, y, startState, callback)
-        local btn = Instance.new("TextButton")
-        btn.Parent = Main
-        btn.Position = UDim2.new(0.1, 0, y, 0)
-        btn.Size = UDim2.new(0.8, 0, 0, 40)
-        btn.BackgroundColor3 = startState and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
-        btn.Text = name .. ": " .. (startState and "ON" or "OFF")
-        btn.TextColor3 = Color3.fromRGB(255,255,255)
-        btn.Font = Enum.Font.GothamSemibold
-        btn.TextSize = 16
-        btn.ZIndex = 3
-        btn.AutoButtonColor = false
-        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 8)
-
-        local state = startState
-        btn.MouseButton1Click:Connect(function()
-            state = not state
-            btn.Text = name .. ": " .. (state and "ON" or "OFF")
-            btn.BackgroundColor3 = state and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
-            callback(state)
-        end)
-        btn.MouseEnter:Connect(function()
-            btn.BackgroundColor3 = state and Color3.fromRGB(50,180,50) or Color3.fromRGB(200,60,60)
-        end)
-        btn.MouseLeave:Connect(function()
-            btn.BackgroundColor3 = state and Color3.fromRGB(34,139,34) or Color3.fromRGB(178,34,34)
-        end)
-        return btn
-    end
-
-    makeToggle("Auto Farm", 0.14, false, function(v) autoFarm = v end)
-    makeToggle("Auto Quest", 0.25, false, function(v) autoQuest = v end)
-    makeToggle("Auto Stats", 0.36, false, function(v) autoStats = v end)
-
-    local teleNPCBtn = Instance.new("TextButton")
-    teleNPCBtn.Parent = Main
-    teleNPCBtn.Position = UDim2.new(0.1, 0, 0.47, 0)
-    teleNPCBtn.Size = UDim2.new(0.8, 0, 0, 42)
-    teleNPCBtn.BackgroundColor3 = Color3.fromRGB(80, 120, 80)
-    teleNPCBtn.Text = "🗺️ Teleport to Quest NPC"
-    teleNPCBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    teleNPCBtn.Font = Enum.Font.GothamSemibold
-    teleNPCBtn.TextSize = 15
-    teleNPCBtn.ZIndex = 3
-    teleNPCBtn.AutoButtonColor = false
-    Instance.new("UICorner", teleNPCBtn).CornerRadius = UDim.new(0, 8)
-    teleNPCBtn.MouseButton1Click:Connect(teleportToQuestNPC)
-    teleNPCBtn.MouseEnter:Connect(function() teleNPCBtn.BackgroundColor3 = Color3.fromRGB(110, 160, 110) end)
-    teleNPCBtn.MouseLeave:Connect(function() teleNPCBtn.BackgroundColor3 = Color3.fromRGB(80, 120, 80) end)
-
-    local teleBossBtn = Instance.new("TextButton")
-    teleBossBtn.Parent = Main
-    teleBossBtn.Position = UDim2.new(0.1, 0, 0.6, 0)
-    teleBossBtn.Size = UDim2.new(0.8, 0, 0, 42)
-    teleBossBtn.BackgroundColor3 = Color3.fromRGB(70,70,150)
-    teleBossBtn.Text = "⚡ Teleport to Boss"
-    teleBossBtn.TextColor3 = Color3.fromRGB(255,255,255)
-    teleBossBtn.Font = Enum.Font.GothamSemibold
-    teleBossBtn.TextSize = 16
-    teleBossBtn.ZIndex = 3
-    teleBossBtn.AutoButtonColor = false
-    Instance.new("UICorner", teleBossBtn).CornerRadius = UDim.new(0, 8)
-    teleBossBtn.MouseButton1Click:Connect(function()
-        local boss = nil
-        for _, v in pairs(Workspace:GetDescendants()) do
-            if v:IsA("Model") and v.Name:lower():find("boss") and v:FindFirstChild("HumanoidRootPart") then
-                boss = v
-                break
-            end
-        end
-        if boss and LocalPlayer.Character then
-            LocalPlayer.Character:MoveTo(boss.HumanoidRootPart.Position)
+    btn.MouseButton1Click:Connect(function()
+        running = not running
+        if running then
+            autoFarm = true
+            autoQuest = true
+            autoStats = true
+            espEnabled = true
+            btn.Text = "STOP"
+            btn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+        else
+            autoFarm = false
+            autoQuest = false
+            autoStats = false
+            espEnabled = false
+            btn.Text = "START"
+            btn.BackgroundColor3 = Color3.fromRGB(50, 150, 50)
         end
     end)
-    teleBossBtn.MouseEnter:Connect(function() teleBossBtn.BackgroundColor3 = Color3.fromRGB(100,100,200) end)
-    teleBossBtn.MouseLeave:Connect(function() teleBossBtn.BackgroundColor3 = Color3.fromRGB(70,70,150) end)
-
-    makeToggle("Player ESP", 0.74, false, function(v) espEnabled = v end)
-
-    local islandLabel = Instance.new("TextLabel")
-    islandLabel.Name = "IslandLabel"
-    islandLabel.Parent = Main
-    islandLabel.Position = UDim2.new(0.1, 0, 0.86, 0)
-    islandLabel.Size = UDim2.new(0.8, 0, 0, 25)
-    islandLabel.BackgroundTransparency = 1
-    islandLabel.Font = Enum.Font.Gotham
-    islandLabel.Text = "Đảo: Đang xác định..."
-    islandLabel.TextColor3 = Color3.fromRGB(200,200,200)
-    islandLabel.TextSize = 14
-    islandLabel.ZIndex = 3
-
-    spawn(function()
-        while wait(2) do
-            local island = getCurrentIsland()
-            if island then
-                islandLabel.Text = "Đảo: " .. island.Name
-            else
-                islandLabel.Text = "Đảo: Không xác định"
-            end
-        end
-    end)
-
-    local ver = Instance.new("TextLabel")
-    ver.Parent = Main
-    ver.Position = UDim2.new(0,0,0.93,0)
-    ver.Size = UDim2.new(1,0,0,25)
-    ver.BackgroundTransparency = 1
-    ver.Font = Enum.Font.Gotham
-    ver.Text = "v4.1 · Real Islands"
-    ver.TextColor3 = Color3.fromRGB(180,180,180)
-    ver.TextSize = 12
-    ver.ZIndex = 3
 end
 
-createGUI()
-print("[Kaitun] GUI loaded. Remote: Attack="..tostring(attackRemote~=nil).." QuestStart="..tostring(startQuestRemote~=nil).." QuestComplete="..tostring(completeQuestRemote~=nil).." AddStats="..tostring(addStatsRemote~=nil))
+-- ================== KHỞI ĐỘNG ==================
+createStopButton()
+print("[Kaitun] Auto Pilot started. Press STOP button to pause.")
 
+-- Vòng lặp chính
 RunService.Heartbeat:Connect(function()
     if LocalPlayer.Character and LocalPlayer.Character:FindFirstChild("HumanoidRootPart") then
         doAutoFarm()
